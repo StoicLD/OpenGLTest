@@ -120,7 +120,7 @@ void SetUniformf(GLint p_id, GLint &uniform_id, const char* name, int value)
 
 int main()
 {
-    int window_width = 540;
+    int window_width = 960;
     int window_height = 960;
     // Initialise GLFW
 //region GLFW窗口初始化
