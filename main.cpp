@@ -118,6 +118,27 @@ void SetUniformf(GLint p_id, GLint &uniform_id, const char* name, int value)
 }
 
 
+class FrameBuffer
+{
+public:
+    FrameBuffer() = default;
+
+    FrameBuffer(int width, int height)
+    {
+        m_width = width;
+        m_height = height;
+    }
+    ~FrameBuffer() = default;
+
+    int m_width;
+    int m_height;
+
+    GLuint m_frameBuffer;
+    GLuint m_texture;
+};
+
+
+
 int main()
 {
     int window_width = 960;
@@ -164,6 +185,7 @@ int main()
     
     // Create and compile our GLSL program from the shaders
     GLuint programID = LoadShaders( "../shader/SimpleVertexShader.glsl", "../shader/SimpleFragmentShader.glsl" );
+    //GLuint programID = LoadShaders( "../shader/DisplayVertexShader.glsl", "../shader/DisplayFragmentShader.glsl" );
 
     // Get a handle for our buffers
     GLuint position = glGetAttribLocation(programID, "position");
@@ -182,6 +204,8 @@ int main()
     glGenBuffers(1, &vertexbuffer);
     glBindBuffer(GL_ARRAY_BUFFER, vertexbuffer);
     glBufferData(GL_ARRAY_BUFFER, sizeof(g_vertex_buffer_data), g_vertex_buffer_data, GL_STATIC_DRAW);
+    glUseProgram(programID);
+
 
 //region 读取设置texture
     //读取设置texture
@@ -212,7 +236,7 @@ int main()
     //endregion
 // Use our shader
 //一定要先use program！！！，才能设置uniform变量！！
-    glUseProgram(programID);
+    //glUseProgram(programID);
 
 //region 计算并且设置uniform变量
     cur_w = image_sur1->w;
@@ -249,7 +273,8 @@ int main()
 
 //endregion
 
-    // 1rst attribute buffer : vertices
+//region 设置顶点属性
+// 1rst attribute buffer : vertices
     glEnableVertexAttribArray(position);
     glBindBuffer(GL_ARRAY_BUFFER, vertexbuffer);
     glVertexAttribPointer(
@@ -260,34 +285,134 @@ int main()
             0,                  // stride
             (void*)0            // array buffer offset
     );
+//endregion
+
+//region 新添加的部分
+//region 创建多个framebuffer，连续的draw
+    //尝试多次模糊，需要创建多个FrameBuffer，把前一次的纹理存储在framebuffer里面
     glViewport(0, 0, window_width, window_height);
+    FrameBuffer frameBuffers[5];
+    for(int i = 0; i < 5; i++)
+    {
+        frameBuffers[i].m_width = window_width;
+        frameBuffers[i].m_height = window_height;
+        auto& id = frameBuffers[i].m_frameBuffer;
+        glGenFramebuffers(1, &id);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, id);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glViewport(0, 0, window_width, window_width);
+
+        GLuint &m_texture = frameBuffers[i].m_texture;
+        glActiveTexture(GL_TEXTURE1);
+        glGenTextures(1, &m_texture);
+        glBindTexture(GL_TEXTURE_2D, m_texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, window_width, window_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_texture, 0);
+        //glBindTexture(GL_TEXTURE_2D, 0);
+    }
+
+    //绘制5次
+    GLuint output_texture_id = m_first_texture;
+    uint8_t outPixels[4 * window_width * window_height];
+    for(int i = 0; i < 5; i++)
+    {
+        glUseProgram(programID);
+        glViewport(0, 0, window_width, window_width);
+        glBindFramebuffer(GL_FRAMEBUFFER, frameBuffers[i].m_frameBuffer);
+        //注意这个clear，需要清楚的是准备要画的buffer，而不是先前的buffer
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, output_texture_id);
+        //BindTexture(GL_TEXTURE0, m_first_texture, frame_buffer_id);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        //
+        output_texture_id = frameBuffers[i].m_texture;
+        //glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    //从output_texture读取最终的像素数据，现在已经可以正确读取
+    glReadPixels(0, 0, window_width, window_height, GL_RGBA, GL_UNSIGNED_BYTE, outPixels);
+//endregion
+
+//region 正常绘制
+//正常绘制
+    glDisableVertexAttribArray(position);
+    // Cleanup VBO
+    glDeleteBuffers(1, &vertexbuffer);
+    glDeleteProgram(programID);
+
+    GLuint m_display_program = LoadShaders( "../shader/DisplayVertexShader.glsl", "../shader/DisplayFragmentShader.glsl" );
+
+    glViewport(0, 0, window_width, window_height);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glUseProgram(m_display_program);
+
+    GLint positionID = glGetAttribLocation(m_display_program, "position");
+    glEnableVertexAttribArray(positionID);
+    static const GLfloat imageVertices[] = {
+            -1.0f, -1.0f,
+            1.0f, -1.0f,
+            -1.0f, 1.0f,
+            -1.0f, 1.0f,
+            1.0f, -1.0f,
+            1.0f, 1.0f
+    };
+    // todo: 这句话！！！，如果直接换成另外一个shader的时候，对于shader属性的解析会出问题。所以要把上一个shader的属性disable了，如果不用了就直接删除掉好了
+    glVertexAttribPointer(positionID, 2, GL_FLOAT, GL_FALSE, 0, imageVertices);
+    //glDisableVertexAttribArray(positionID);
+
+//
+    // todo: 抽取
+    GLint to_texture_u = glGetUniformLocation(m_display_program, "to");
+    if (to_texture_u < 0) {
+        std::cout << "can't get location of 'uniform sample2D': " <<  "to";
+        return -1;
+    }
+    glActiveTexture(GL_TEXTURE5);
+    GLuint to_texture;
+    glGenTextures(1, &to_texture);
+    glBindTexture(GL_TEXTURE_2D, to_texture);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, window_width, window_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, outPixels);
+
+    glUniform1i(to_texture_u, 5);
+
+
+//endregion
+//endregion
+
+    //glBindTexture(GL_TEXTURE_2D, 0);
+    std::cout << std::endl;
+//    glViewport(0, 0, window_width, window_height);
+//    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+//    glClear(GL_COLOR_BUFFER_BIT);
+//
+//    glUseProgram(programID);
+//    glActiveTexture(GL_TEXTURE0);
+//    glBindTexture(GL_TEXTURE_2D, m_first_texture);
+
     //glDisableVertexAttribArray(position);
     do{
 
         // Clear the screen
         //glViewport(0, 0, window_width, window_height);
         glClear( GL_COLOR_BUFFER_BIT );
-
-        // Use our shader
-//        glUseProgram(programID);
-//
-//        // 1rst attribute buffer : vertices
-//        glEnableVertexAttribArray(position);
-//        glBindBuffer(GL_ARRAY_BUFFER, vertexbuffer);
-//        glVertexAttribPointer(
-//                position, // The attribute we want to configure
-//                2,                  // size
-//                GL_FLOAT,           // type
-//                GL_FALSE,           // normalized?
-//                0,                  // stride
-//                (void*)0            // array buffer offset
-//        );
-
         // Draw the triangle !
         glDrawArrays(GL_TRIANGLES, 0, 6); // 3 indices starting at 0 -> 1 triangle
-
-//        glDisableVertexAttribArray(position);
-
+        //glReadPixels(0, 0, window_width, window_height, GL_RGBA, GL_UNSIGNED_BYTE, outPixels);
         // Swap buffers
         glfwSwapBuffers(window);
         glfwPollEvents();
