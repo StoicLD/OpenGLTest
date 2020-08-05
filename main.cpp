@@ -288,11 +288,13 @@ int main()
 //endregion
 
 //region 新添加的部分
-//region 创建多个framebuffer，连续的draw
+//region 创建多个framebuffer，绘制第一次
+    const int frame_buffer_count = 10;
     //尝试多次模糊，需要创建多个FrameBuffer，把前一次的纹理存储在framebuffer里面
+    uint8_t outPixels[4 * window_width * window_height];
     glViewport(0, 0, window_width, window_height);
-    FrameBuffer frameBuffers[5];
-    for(int i = 0; i < 5; i++)
+    FrameBuffer frameBuffers[frame_buffer_count];
+    for(int i = 0; i < frame_buffer_count; i++)
     {
         frameBuffers[i].m_width = window_width;
         frameBuffers[i].m_height = window_height;
@@ -316,12 +318,94 @@ int main()
         //glBindTexture(GL_TEXTURE_2D, 0);
     }
 
-    //绘制5次
+    //先绘制第一次
     GLuint output_texture_id = m_first_texture;
-    uint8_t outPixels[4 * window_width * window_height];
-    for(int i = 0; i < 5; i++)
+    glViewport(0, 0, window_width, window_width);
+    glBindFramebuffer(GL_FRAMEBUFFER, frameBuffers[0].m_frameBuffer);
+    //注意这个clear，需要清楚的是准备要画的buffer，而不是先前的buffer
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, output_texture_id);
+    //BindTexture(GL_TEXTURE0, m_first_texture, frame_buffer_id);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    output_texture_id = frameBuffers[0].m_texture;
+    glReadPixels(0, 0, window_width, window_height, GL_RGBA, GL_UNSIGNED_BYTE, outPixels);
+//endregion
+
+//region 后续的blur shader创建
+    glDisableVertexAttribArray(position);
+    // Cleanup VBO
+    glDeleteBuffers(1, &vertexbuffer);
+    glDeleteProgram(programID);
+
+    GLuint continueBlurProgram = LoadShaders( "../shader/RepeatBlurVertexShader.glsl", "../shader/RepeatBlurFragmentShader.glsl" );
+    // Get a handle for our buffers
+    GLuint continueBlurPosition = glGetAttribLocation(continueBlurProgram, "position");
+
+    //设置顶点属性buffer
+    static const GLfloat continueBlur_vertex_buffer_data[] = {
+            -1.0f, -1.0f,
+            1.0f, -1.0f,
+            -1.0f, 1.0f,
+            -1.0f, 1.0f,
+            1.0f, -1.0f,
+            1.0f, 1.0f
+    };
+    GLuint continueBlurVertexBuffer;
+    glGenBuffers(1, &continueBlurVertexBuffer);
+    glBindBuffer(GL_ARRAY_BUFFER, continueBlurVertexBuffer);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(continueBlur_vertex_buffer_data), continueBlur_vertex_buffer_data, GL_STATIC_DRAW);
+    glUseProgram(continueBlurProgram);
+
+    //设置顶点属性
+    glEnableVertexAttribArray(continueBlurPosition);
+    glBindBuffer(GL_ARRAY_BUFFER, continueBlurVertexBuffer);
+    glVertexAttribPointer(
+            continueBlurPosition, // The attribute we want to configure
+            2,                  // size
+            GL_FLOAT,           // type
+            GL_FALSE,           // normalized?
+            0,                  // stride
+            (void*)0            // array buffer offset
+    );
+
+    //设置texture
+    GLuint continueBlur_texture;
+    GLint continueBlur_texture_ID;
+    glActiveTexture(GL_TEXTURE0);
+    glGenTextures(1, &continueBlur_texture);
+    glBindTexture(GL_TEXTURE_2D, continueBlur_texture);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, window_width, window_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, outPixels);
+
+    continueBlur_texture_ID = glGetUniformLocation(continueBlurProgram ,"to");
+    glUniform1i(continueBlur_texture_ID, 0);
+
+    //设置uniform变量
+    GLint continue_uniform_scale_w_id;
+    GLint continue_uniform_scale_h_id;
+    GLint continue_uniform_resolution_w_id;
+    GLint continue_uniform_resolution_h_id;
+    SetUniformf(continueBlurProgram, continue_uniform_scale_w_id, "scale_w", scale_w);
+    SetUniformf(continueBlurProgram, continue_uniform_scale_h_id, "scale_h", scale_h);
+    SetUniformf(continueBlurProgram, continue_uniform_resolution_w_id, "resolution_w", resolution_w);
+    SetUniformf(continueBlurProgram, continue_uniform_resolution_h_id, "resolution_h", resolution_h);
+
+//endregion
+
+//region 连续的绘制
+    //绘制4次
+    //GLuint output_texture_id = m_first_texture;
+    //uint8_t outPixels[4 * window_width * window_height];
+    for(int i = 1; i < frame_buffer_count; i++)
     {
-        glUseProgram(programID);
+        glUseProgram(continueBlurProgram);
         glViewport(0, 0, window_width, window_width);
         glBindFramebuffer(GL_FRAMEBUFFER, frameBuffers[i].m_frameBuffer);
         //注意这个clear，需要清楚的是准备要画的buffer，而不是先前的buffer
@@ -331,7 +415,7 @@ int main()
         glBindTexture(GL_TEXTURE_2D, output_texture_id);
         //BindTexture(GL_TEXTURE0, m_first_texture, frame_buffer_id);
         glDrawArrays(GL_TRIANGLES, 0, 6);
-
+        glReadPixels(0, 0, window_width, window_height, GL_RGBA, GL_UNSIGNED_BYTE, outPixels);
         //
         output_texture_id = frameBuffers[i].m_texture;
         //glBindTexture(GL_TEXTURE_2D, 0);
@@ -342,10 +426,11 @@ int main()
 
 //region 正常绘制
 //正常绘制
-    glDisableVertexAttribArray(position);
+    //由于下面的todo内容可以看到，需要先取消删除属性内容
+    glDisableVertexAttribArray(continueBlurPosition);
     // Cleanup VBO
-    glDeleteBuffers(1, &vertexbuffer);
-    glDeleteProgram(programID);
+    glDeleteBuffers(1, &continueBlurVertexBuffer);
+    glDeleteProgram(continueBlurProgram);
 
     GLuint m_display_program = LoadShaders( "../shader/DisplayVertexShader.glsl", "../shader/DisplayFragmentShader.glsl" );
 
